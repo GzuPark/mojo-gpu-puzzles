@@ -1,44 +1,87 @@
 from memory import UnsafePointer
-from gpu import thread_idx, block_dim, block_idx
-from gpu.host import DeviceContext, HostBuffer
+from gpu import thread_idx, block_dim, block_idx  # GPU 스레드 정보와 블록 차원 정보
+from gpu.host import DeviceContext, HostBuffer  # GPU 디바이스 컨텍스트와 호스트 버퍼
 from testing import assert_equal
 
 # ANCHOR: broadcast_add
-alias SIZE = 2
-alias BLOCKS_PER_GRID = 1
-alias THREADS_PER_BLOCK = (3, 3)
-alias dtype = DType.float32
+# 프로그램에서 사용할 상수들을 정의합니다 (컴파일 타임에 결정됨)
+alias SIZE = 2  # 2D 배열의 크기 (2x2 배열 처리)
+alias BLOCKS_PER_GRID = 1  # 그리드당 블록 개수 (1개 블록만 사용)
+alias THREADS_PER_BLOCK = (3, 3)  # 블록당 스레드 개수 (3x3 = 9개 스레드, 데이터보다 많음)
+alias dtype = DType.float32  # 데이터 타입 (32비트 부동소수점)
 
 
+# GPU 커널 함수: 브로드캐스트 덧셈 연산
+# 1D 벡터 a와 1D 벡터 b를 2D 배열로 브로드캐스트하여 더합니다
+# 예: a=[0,2], b=[0,3] → output = [[0+0, 2+0], [0+3, 2+3]] = [[0,2], [3,5]]
 fn broadcast_add(
-    output: UnsafePointer[Scalar[dtype]],
-    a: UnsafePointer[Scalar[dtype]],
-    b: UnsafePointer[Scalar[dtype]],
-    size: Int,
+    output: UnsafePointer[Scalar[dtype]],  # 결과를 저장할 2D 배열 (1D로 저장)
+    a: UnsafePointer[Scalar[dtype]],  # 열 방향으로 브로드캐스트될 1D 벡터
+    b: UnsafePointer[Scalar[dtype]],  # 행 방향으로 브로드캐스트될 1D 벡터
+    size: Int,  # 배열의 크기 (bounds checking용)
 ):
-    row = thread_idx.y
-    col = thread_idx.x
-    # FILL ME IN (roughly 2 lines)
+    # 2D 스레드 블록에서 현재 스레드의 위치를 가져옵니다
+    # ⚠️ 주의: thread_idx의 x, y와 row, col의 대응 관계를 정확히 이해해야 합니다!
+    # thread_idx.y → row (행 인덱스): 세로 방향 위치 (0, 1, 2)
+    # thread_idx.x → col (열 인덱스): 가로 방향 위치 (0, 1, 2)
+    row = thread_idx.y  # 행 인덱스 (Y축 = 세로 방향)
+    col = thread_idx.x  # 열 인덱스 (X축 = 가로 방향)
+
+    # 스레드 안전성을 위한 경계 검사
+    # 3x3 스레드 블록을 사용하지만 데이터는 2x2이므로 일부 스레드는 유효하지 않음
+    if row < size and col < size:
+        # 브로드캐스트 덧셈의 핵심 로직:
+        # ⚠️ 인덱스 순서 주의: a[col] + b[row]
+        # - a[col]: 벡터 a의 col번째 요소 (열 방향으로 반복)
+        # - b[row]: 벡터 b의 row번째 요소 (행 방향으로 반복)
+        # - output[row * size + col]: 2D → 1D 변환 (row-major 순서)
+        output[row * size + col] = a[col] + b[row]
 
 
 # ANCHOR_END: broadcast_add
+
+
 def main():
+    # GPU 디바이스 컨텍스트를 생성합니다 (context manager 사용)
     with DeviceContext() as ctx:
+        # 출력용 GPU 메모리 버퍼를 생성 (2x2 = 4개 요소)
         out = ctx.enqueue_create_buffer[dtype](SIZE * SIZE).enqueue_fill(0)
+
+        # 예상 결과를 저장할 호스트 메모리 버퍼 생성
         expected = ctx.enqueue_create_host_buffer[dtype](
             SIZE * SIZE
         ).enqueue_fill(0)
+
+        # 입력 벡터들을 위한 GPU 메모리 버퍼 생성
+        # a: 열 방향으로 브로드캐스트될 1D 벡터 (크기: SIZE)
+        # b: 행 방향으로 브로드캐스트될 1D 벡터 (크기: SIZE)
         a = ctx.enqueue_create_buffer[dtype](SIZE).enqueue_fill(0)
         b = ctx.enqueue_create_buffer[dtype](SIZE).enqueue_fill(0)
+        # GPU 버퍼들을 호스트 메모리에 매핑하여 데이터를 초기화합니다
         with a.map_to_host() as a_host, b.map_to_host() as b_host:
+            # 입력 벡터들을 초기화합니다
             for i in range(SIZE):
-                a_host[i] = i
-                b_host[i] = i
+                a_host[i] = i * 2  # a = [0, 2] (열 방향으로 브로드캐스트)
+                b_host[i] = i * 3  # b = [0, 3] (행 방향으로 브로드캐스트)
 
-            for i in range(SIZE):
-                for j in range(SIZE):
+            # 예상 결과를 계산합니다 (브로드캐스트 덧셈)
+            # ⚠️ 인덱스 순서 주의: i는 행, j는 열
+            # expected[i * SIZE + j] = a_host[j] + b_host[i]
+            # 결과 행렬:
+            # [[a[0]+b[0], a[1]+b[0]]   [[0+0, 2+0]]   [[0, 2]]
+            #  [a[0]+b[1], a[1]+b[1]]] = [[0+3, 2+3]] = [[3, 5]]
+            for i in range(SIZE):  # i: 행 인덱스
+                for j in range(SIZE):  # j: 열 인덱스
                     expected[i * SIZE + j] = a_host[j] + b_host[i]
 
+        # GPU 커널 함수를 실행합니다
+        # broadcast_add: 1D 벡터들을 2D로 브로드캐스트하여 덧셈 수행
+        # out.unsafe_ptr(): 결과를 저장할 2D 배열의 포인터
+        # a.unsafe_ptr(): 열 방향으로 브로드캐스트될 벡터 a의 포인터
+        # b.unsafe_ptr(): 행 방향으로 브로드캐스트될 벡터 b의 포인터
+        # SIZE: 배열 크기 (bounds checking용)
+        # grid_dim: 1개 블록 사용
+        # block_dim: (3,3) = 9개 스레드 (데이터 4개보다 많음)
         ctx.enqueue_function[broadcast_add](
             out.unsafe_ptr(),
             a.unsafe_ptr(),
@@ -48,11 +91,18 @@ def main():
             block_dim=THREADS_PER_BLOCK,
         )
 
+        # 모든 GPU 작업이 완료될 때까지 기다립니다
         ctx.synchronize()
 
+        # GPU 메모리 결과를 호스트 메모리로 복사하여 확인합니다
         with out.map_to_host() as out_host:
+            # 결과를 출력합니다
+            # out: [0.0, 2.0, 3.0, 5.0] (1D 배열로 저장된 2x2 브로드캐스트 결과)
+            # 2D로 해석하면: [[0, 2], [3, 5]]
             print("out:", out_host)
             print("expected:", expected)
+
+            # 브로드캐스트 덧셈 결과가 올바른지 검증
             for i in range(SIZE):
                 for j in range(SIZE):
                     assert_equal(out_host[i * SIZE + j], expected[i * SIZE + j])
