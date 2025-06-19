@@ -1,52 +1,164 @@
 from memory import UnsafePointer
-from gpu import thread_idx, block_idx, block_dim
-from gpu.host import DeviceContext
+from gpu import thread_idx, block_idx, block_dim  # GPU 스레드/블록 인덱스 및 차원 정보
+from gpu.host import DeviceContext  # GPU 디바이스와 상호작용하기 위한 컨텍스트 클래스
 from testing import assert_equal
 
 # ANCHOR: add_10_blocks_2d
-alias SIZE = 5
-alias BLOCKS_PER_GRID = (2, 2)
-alias THREADS_PER_BLOCK = (3, 3)
-alias dtype = DType.float32
+# 프로그램에서 사용할 상수들을 정의합니다 (컴파일 타임에 결정됨)
+alias SIZE = 5  # 2D 행렬의 크기 (5x5 = 25개 요소)
+alias BLOCKS_PER_GRID = (2, 2)  # 그리드당 블록 수 (2x2 = 4개 블록 사용)
+alias THREADS_PER_BLOCK = (3, 3)  # 블록당 스레드 수 (3x3 = 9개 스레드) - 행렬보다 적음!
+alias dtype = DType.float32  # 데이터 타입 (32비트 부동소수점)
 
 
+# GPU 커널 함수: 다중 2D 블록을 사용한 2D 행렬 처리
+# 이 함수는 2D 데이터가 단일 블록의 2D 스레드 수보다 클 때 사용하는 패턴입니다
+# 핵심: 여러 2D 블록이 협력하여 큰 2D 행렬을 처리합니다
 fn add_10_blocks_2d(
-    output: UnsafePointer[Scalar[dtype]],
-    a: UnsafePointer[Scalar[dtype]],
-    size: Int,
+    output: UnsafePointer[Scalar[dtype]],  # 출력 결과를 저장할 메모리 포인터
+    a: UnsafePointer[Scalar[dtype]],  # 입력 2D 행렬이 저장된 메모리 포인터 (1D로 저장)
+    size: Int,  # 2D 행렬의 한 변의 크기 (5x5 행렬에서 5)
 ):
+    # 🔑 핵심 개념: 2D 글로벌 스레드 인덱스 계산
+    # 각 스레드가 처리할 2D 행렬에서의 전역 위치를 계산합니다
+    #
+    # 🧮 계산 공식:
+    # row = block_dim.y × block_idx.y + thread_idx.y
+    # col = block_dim.x × block_idx.x + thread_idx.x
+    #
+    # 📊 구체적 예시 (우리 설정: 3×3 스레드 블록, 2×2 블록 그리드):
+    #
+    # 🔸 블록 (0,0) - 좌상단 영역:
+    #   시작 위치: (0×3, 0×3) = (0,0)
+    #   스레드 (0,0) → 글로벌 (0,0)  스레드 (0,1) → 글로벌 (0,1)  스레드 (0,2) → 글로벌 (0,2)
+    #   스레드 (1,0) → 글로벌 (1,0)  스레드 (1,1) → 글로벌 (1,1)  스레드 (1,2) → 글로벌 (1,2)
+    #   스레드 (2,0) → 글로벌 (2,0)  스레드 (2,1) → 글로벌 (2,1)  스레드 (2,2) → 글로벌 (2,2)
+    #
+    # 🔸 블록 (1,0) - 우상단 영역:
+    #   시작 위치: (0×3, 1×3) = (0,3)
+    #   스레드 (0,0) → 글로벌 (0,3)  스레드 (0,1) → 글로벌 (0,4)  스레드 (0,2) → 글로벌 (0,5) ❌범위초과
+    #   스레드 (1,0) → 글로벌 (1,3)  스레드 (1,1) → 글로벌 (1,4)  스레드 (1,2) → 글로벌 (1,5) ❌범위초과
+    #   스레드 (2,0) → 글로벌 (2,3)  스레드 (2,1) → 글로벌 (2,4)  스레드 (2,2) → 글로벌 (2,5) ❌범위초과
+    #
+    # 🔸 블록 (0,1) - 좌하단 영역:
+    #   시작 위치: (1×3, 0×3) = (3,0)
+    #   스레드 (0,0) → 글로벌 (3,0)  스레드 (0,1) → 글로벌 (3,1)  스레드 (0,2) → 글로벌 (3,2)
+    #   스레드 (1,0) → 글로벌 (4,0)  스레드 (1,1) → 글로벌 (4,1)  스레드 (1,2) → 글로벌 (4,2)
+    #   스레드 (2,0) → 글로벌 (5,0) ❌범위초과  스레드 (2,1) → 글로벌 (5,1) ❌범위초과  스레드 (2,2) → 글로벌 (5,2) ❌범위초과
+    #
+    # 🔸 블록 (1,1) - 우하단 영역:
+    #   시작 위치: (1×3, 1×3) = (3,3)
+    #   스레드 (0,0) → 글로벌 (3,3)  스레드 (0,1) → 글로벌 (3,4)  스레드 (0,2) → 글로벌 (3,5) ❌범위초과
+    #   스레드 (1,0) → 글로벌 (4,3)  스레드 (1,1) → 글로벌 (4,4)  스레드 (1,2) → 글로벌 (4,5) ❌범위초과
+    #   스레드 (2,0) → 글로벌 (5,3) ❌범위초과  스레드 (2,1) → 글로벌 (5,4) ❌범위초과  스레드 (2,2) → 글로벌 (5,5) ❌범위초과
     row = block_dim.y * block_idx.y + thread_idx.y
     col = block_dim.x * block_idx.x + thread_idx.x
-    # FILL ME IN (roughly 2 lines)
+
+    # 계산된 좌표가 실제 행렬 범위 내에 있는지 확인합니다
+    #
+    # ⚠️ 왜 경계 검사가 필수인가?
+    # • 총 스레드 수: 4블록 × 9스레드 = 36개
+    # • 실제 데이터: 5×5 = 25개 요소
+    # • 차이: 36 - 25 = 11개 스레드가 "빈 공간"을 가리킴
+    #
+    # 🚨 경계 검사 없이 메모리 접근하면:
+    # → 세그멘테이션 오류 (Segmentation Fault)
+    # → 프로그램 크래시
+    # → 예측 불가능한 결과
+    #
+    # 📋 실제 처리되는 요소 개수:
+    # • 블록(0,0): 9개 (3×3 전체)
+    # • 블록(1,0): 6개 (3×2, col=5 제외)
+    # • 블록(0,1): 6개 (2×3, row=5 제외)
+    # • 블록(1,1): 4개 (2×2, row=5,col=5 제외)
+    # • 합계: 9+6+6+4 = 25개 ✅ 완벽한 커버리지!
+    if row < size and col < size:
+        # 2D 좌표를 1D 인덱스로 변환하여 메모리에 접근합니다
+        # 공식: 1D_index = row * size + col (행 우선 순서, row-major layout)
+        # 예: (2,3) 위치 → 2 * 5 + 3 = 13번째 요소
+        #
+        # 메모리 레이아웃 시각화 (5x5 행렬):
+        # 행렬:     1D 배열:
+        # [0,0] [0,1] [0,2] [0,3] [0,4]  →  [0] [1] [2] [3] [4]
+        # [1,0] [1,1] [1,2] [1,3] [1,4]  →  [5] [6] [7] [8] [9]
+        # [2,0] [2,1] [2,2] [2,3] [2,4]  →  [10][11][12][13][14]
+        # [3,0] [3,1] [3,2] [3,3] [3,4]  →  [15][16][17][18][19]
+        # [4,0] [4,1] [4,2] [4,3] [4,4]  →  [20][21][22][23][24]
+        #
+        # 🎯 변환 예시:
+        # • (0,0) → 0×5 + 0 = 0   • (2,3) → 2×5 + 3 = 13
+        # • (1,2) → 1×5 + 2 = 7   • (4,4) → 4×5 + 4 = 24
+        output[row * size + col] = a[row * size + col] + 10.0
 
 
 # ANCHOR_END: add_10_blocks_2d
 
 
 def main():
+    # DeviceContext를 사용하여 GPU와의 상호작용을 관리합니다
+    # 이 컨텍스트는 GPU 메모리 할당, 데이터 복사, 커널 실행 등을 담당합니다
     with DeviceContext() as ctx:
-        out = ctx.enqueue_create_buffer[dtype](SIZE * SIZE).enqueue_fill(0)
+        # 2D 행렬을 위한 GPU 메모리 버퍼들을 생성합니다
+        # SIZE * SIZE = 5 * 5 = 25개의 요소를 가진 1차원 배열로 2D 행렬을 저장
+        out = ctx.enqueue_create_buffer[dtype](SIZE * SIZE).enqueue_fill(
+            0
+        )  # 출력 결과 버퍼
         expected = ctx.enqueue_create_host_buffer[dtype](
             SIZE * SIZE
-        ).enqueue_fill(1)
-        a = ctx.enqueue_create_buffer[dtype](SIZE * SIZE).enqueue_fill(1)
+        ).enqueue_fill(
+            1
+        )  # 기대값을 저장할 호스트 메모리 버퍼
+        a = ctx.enqueue_create_buffer[dtype](SIZE * SIZE).enqueue_fill(
+            1
+        )  # 입력 행렬 버퍼 (모든 요소 1.0으로 초기화)
+
+        # GPU 커널 함수를 실행합니다
+        # 🔑 핵심: 다중 2D 블록 구성으로 큰 2D 행렬을 처리합니다
+        #
+        # 📊 리소스 분석:
+        # • 처리할 데이터: 5×5 = 25개 요소
+        # • 사용할 블록: 2×2 = 4개 블록
+        # • 블록당 스레드: 3×3 = 9개 스레드
+        # • 총 스레드: 4×9 = 36개 스레드
+        # • 오버헤드: 36-25 = 11개 스레드 (30% 오버헤드)
+        #
+        # 2D 작업 분배:
+        # 블록(0,0): 영역(0:3, 0:3) → 9개 스레드가 위치 (0,0)~(2,2) 처리
+        # 블록(1,0): 영역(0:3, 3:6) → 9개 스레드가 위치 (0,3)~(2,5) 시도 (일부 범위 초과)
+        # 블록(0,1): 영역(3:6, 0:3) → 9개 스레드가 위치 (3,0)~(5,2) 시도 (일부 범위 초과)
+        # 블록(1,1): 영역(3:6, 3:6) → 9개 스레드가 위치 (3,3)~(5,5) 시도 (일부 범위 초과)
+        #
+        # 실제 처리되는 영역 (경계 검사 후):
+        # 블록(0,0): (0,0)~(2,2) - 9개 요소 처리
+        # 블록(1,0): (0,3)~(2,4) - 6개 요소 처리 (col=5는 범위 초과)
+        # 블록(0,1): (3,0)~(4,2) - 6개 요소 처리 (row=5는 범위 초과)
+        # 블록(1,1): (3,3)~(4,4) - 4개 요소 처리 (row=5, col=5는 범위 초과)
+        # 총합: 9+6+6+4 = 25개 요소 (완전 커버리지)
         ctx.enqueue_function[add_10_blocks_2d](
-            out.unsafe_ptr(),
-            a.unsafe_ptr(),
-            SIZE,
-            grid_dim=BLOCKS_PER_GRID,
-            block_dim=THREADS_PER_BLOCK,
+            out.unsafe_ptr(),  # 출력 배열 포인터
+            a.unsafe_ptr(),  # 입력 배열 포인터
+            SIZE,  # 행렬 크기 (5)
+            grid_dim=BLOCKS_PER_GRID,  # 그리드: 2×2 블록
+            block_dim=THREADS_PER_BLOCK,  # 블록: 3×3 스레드
         )
 
+        # 모든 GPU 작업이 완료될 때까지 기다립니다
         ctx.synchronize()
 
-        for i in range(SIZE):
-            for j in range(SIZE):
+        # 기대값을 계산합니다 (2D 행렬의 각 요소에 10을 더한 값)
+        # expected 배열이 1.0으로 초기화되어 있으므로 각 요소에 10을 더해 11.0으로 만듭니다
+        # 2D 행렬을 1D 배열로 저장하므로 2중 루프로 접근합니다
+        for i in range(SIZE):  # 행(row) 반복
+            for j in range(SIZE):  # 열(col) 반복
+                # 2D 좌표 (i,j)를 1D 인덱스 (i * SIZE + j)로 변환
+                # 예: (2,3) → 2 * 5 + 3 = 13번째 요소
                 expected[i * SIZE + j] += 10
 
+        # GPU에서 계산된 결과를 호스트 메모리로 매핑하여 확인합니다
         with out.map_to_host() as out_host:
-            print("out:", out_host)
-            print("expected:", expected)
+            print("out:", out_host)  # GPU 결과: 모든 요소가 11.0 (1.0 + 10.0)
+            print("expected:", expected)  # 기대값: 모든 요소가 11.0 (1.0 + 10.0)
+
             for i in range(SIZE):
                 for j in range(SIZE):
                     assert_equal(out_host[i * SIZE + j], expected[i * SIZE + j])
