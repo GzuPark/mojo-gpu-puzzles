@@ -130,9 +130,9 @@ fn axis_sum[
     #
     # 리덕션 과정 시각화 (Block 0 예시):
     # 초기:     [0, 1, 2, 3, 4, 5, 0, 0]
-    # Stride 4: [4, 5, 6, 7, 4, 5, 0, 0]  (cache[i] += cache[i+4])
-    # Stride 2: [10,12, 6, 7, 4, 5, 0, 0]  (cache[i] += cache[i+2])
-    # Stride 1: [15,12, 6, 7, 4, 5, 0, 0]  (cache[i] += cache[i+1])
+    # Stride 4: [4, 6, 2, 3, 4, 5, 0, 0]  (cache[i] += cache[i+4])
+    # Stride 2: [6, 9, 2, 3, 4, 5, 0, 0]  (cache[i] += cache[i+2])
+    # Stride 1: [15,9, 2, 3, 4, 5, 0, 0]  (cache[i] += cache[i+1])
     # 최종 결과: cache[0] = 15 (Row 0의 합계)
 
     stride = TPB // 2  # 시작 보폭: 8 // 2 = 4
