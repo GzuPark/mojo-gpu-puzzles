@@ -131,8 +131,8 @@ struct Conv1DCustomOp:
         # 3. 디바이스 간 투명한 데이터 이동
         # 4. MAX Graph 최적화 엔진과 통합
         output: OutputTensor[rank=1],  # 1차원 출력 텐서
-        input: InputTensor[rank=1],  # 입력 텐서 (1차원)
-        kernel: InputTensor[rank=1],  # 커널 텐서 (1차원)
+        input: InputTensor[rank = output.rank],  # 입력 텐서 (1차원)
+        kernel: InputTensor[rank = output.rank],  # 커널 텐서 (1차원)
         # Device Context Pointer
         # 이전: DeviceContext를 직접 생성하여 사용
         # 현재: MAX Graph에서 관리하는 컨텍스트를 포인터로 전달받음
@@ -205,14 +205,16 @@ struct Conv1DCustomOp:
                 # 현재: DeviceBuffer로 래핑하여 타입 안전성 제공
                 #
                 # DeviceBuffer 구성 요소:
-                # - output.dtype: 버퍼의 데이터 타입
+                # - output_tensor.dtype: 버퍼의 데이터 타입
                 # - gpu_ctx: 메모리를 관리하는 디바이스 컨텍스트
                 # - rebind[...]: 포인터 타입 변환 (타입 안전성 유지)
                 # - input_size: 버퍼 크기 (요소 개수)
                 # - owning=False: 메모리 소유권을 갖지 않음 (MAX Graph가 관리)
-                DeviceBuffer[dtype](
+                DeviceBuffer[output_tensor.dtype](
                     gpu_ctx,
-                    rebind[UnsafePointer[Scalar[dtype]]](output_tensor.ptr),
+                    rebind[UnsafePointer[Scalar[output_tensor.dtype]]](
+                        output_tensor.ptr
+                    ),
                     input_size,
                     owning=False,
                 ),
