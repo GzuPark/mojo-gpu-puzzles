@@ -1,6 +1,6 @@
 from gpu import thread_idx, block_dim, block_idx, barrier
 from gpu.host import DeviceContext
-from gpu.host._compile import _get_gpu_target
+from gpu.host.compile import get_gpu_target
 from layout import Layout, LayoutTensor
 from layout.tensor_builder import LayoutTensorBuild as tb
 from utils import IndexList
@@ -15,7 +15,7 @@ alias SIZE = 1024
 alias rank = 1
 alias layout = Layout.row_major(SIZE)
 alias dtype = DType.float32
-alias SIMD_WIDTH = simdwidthof[dtype, target = _get_gpu_target()]()
+alias SIMD_WIDTH = simdwidthof[dtype, target = get_gpu_target()]()
 
 
 fn elementwise_add[
