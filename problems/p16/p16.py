@@ -1,7 +1,7 @@
 # ANCHOR: softmax_custom_op_graph
 from pathlib import Path
 import numpy as np
-from max.driver import CPU, Accelerator, Device, Tensor, accelerator_count
+from max.driver import CPU, Accelerator, Device, Tensor
 from max.dtype import DType
 from max.engine import InferenceSession
 from max.graph import DeviceRef, Graph, TensorType, ops
@@ -73,7 +73,7 @@ def softmax(
 
 
 if __name__ == "__main__":
-    INPUT_SIZE = 128
+    INPUT_SIZE = 512
     cpu_session = InferenceSession(devices=[CPU()])
     gpu_session = InferenceSession(devices=[Accelerator()])
     input_array = np.random.randn(INPUT_SIZE).astype(np.float32)
@@ -97,3 +97,5 @@ if __name__ == "__main__":
     total_prob_gpu = np.round(np.sum(gpu_result.to_numpy()), 5)
     print(f"Sum of all probabilities on CPU: {total_prob_cpu}")
     print(f"Sum of all probabilities on GPU: {total_prob_gpu}")
+    print(f"Shape of CPU result: {cpu_result.to_numpy().shape}")
+    print(f"Shape of GPU result: {gpu_result.to_numpy().shape}")
