@@ -256,7 +256,7 @@ fn transpose_kernel[
 # - 입력: 원시 주의 점수 (raw attention scores)
 # - 출력: 정규화된 확률 분포 (∑weights = 1.0)
 # - 수치적 안정성: exp(x - max(x)) 패턴 사용
-fn softmax_kernel[
+fn softmax_gpu_kernel[
     layout: Layout,
     seq_len: Int,
     dtype: DType = DType.float32,
@@ -626,7 +626,7 @@ struct AttentionCustomOp:
             # - 병렬 리덕션으로 최댓값과 합계 계산
             # - 공유 메모리 활용으로 스레드 간 효율적 협력
             gpu_ctx.enqueue_function[
-                softmax_kernel[layout_scores, seq_len, dtype]
+                softmax_gpu_kernel[layout_scores, seq_len, dtype]
             ](
                 weights,
                 weights,
